@@ -88,7 +88,10 @@ python3 plan_cuts.py "<출력폴더>/analysis.json"
 python3 render_master.py "<출력폴더>/edl.json" --preset master
 ```
 
-`select/aselect` 필터로 한 번에 통과시켜 프레임 단위로 정확히 자른다.
+`select/aselect` 필터로 통과시켜 프레임 단위로 정확히 자른다. 남길 구간이 80개를
+넘으면 ffmpeg 표현식 파서 한계(between() 항 100개 부근에서 `Cannot allocate memory`)에
+걸리므로 자동으로 패스를 나눠 렌더한 뒤 재인코딩 없이 이어붙인다 — 묶음 경계는 항상
+컷 사이라 프레임 손실이 없다. 한 패스에 넣을 구간 수는 `--max-terms`로 조정한다.
 결과는 `master/<이름>_master.mp4`, 로그는 `render_master_log.json`.
 렌더 후 실제 길이와 예상 길이를 비교해 **1초 이상 어긋나면 경고**한다 — 이때는
 EDL을 다시 확인한다.

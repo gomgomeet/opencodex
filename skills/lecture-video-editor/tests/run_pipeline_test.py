@@ -35,7 +35,12 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 
 def sh(cmd: list[str]) -> str:
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=SCRIPTS)
+    # encoding을 명시하지 않으면 로케일 코드페이지로 디코딩한다. 한글 Windows(cp949)에서
+    # ffmpeg/스크립트가 뱉는 UTF-8 바이트를 만나면 리더 스레드가 죽고 stdout이 None이 된다.
+    proc = subprocess.run(
+        cmd, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", cwd=SCRIPTS,
+    )
     if proc.returncode != 0:
         print(proc.stdout)
         print(proc.stderr, file=sys.stderr)
@@ -101,11 +106,12 @@ def main() -> int:
     master = Path(log["output"])
     check("마스터 파일 생성", master.exists())
     check("길이 오차 1초 미만", abs(log["drift_sec"]) < 1.0, f"{log['drift_sec']:+.2f}s")
+    check("단일 패스로 처리", log["passes"] == 1, f"{log['passes']}패스")
 
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a",
          "-show_entries", "stream=duration", "-of", "csv=p=0", str(master)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).stdout.strip()
     a_dur = float(probe.splitlines()[0]) if probe else 0.0
     check("A/V 싱크 (0.2초 이내)", abs(a_dur - log["actual_sec"]) < 0.2,
@@ -114,9 +120,33 @@ def main() -> int:
     residual = subprocess.run(
         ["ffmpeg", "-hide_banner", "-nostats", "-i", str(master),
          "-af", "silencedetect=noise=-35dB:d=1.5", "-vn", "-f", "null", "-"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).stderr.count("silence_start")
     check("긴 무음이 남지 않음", residual == 0, f"{residual}개 잔존")
+
+    # select 수식은 between() 항이 100개를 넘으면 ffmpeg 파서가 죽는다. 구간이 많으면
+    # 패스를 나눠 렌더한 뒤 이어붙여야 하고, 그 결과가 단일 패스와 같아야 한다.
+    # 픽스처는 구간이 적으므로 --max-terms 2로 분할 경로를 강제해 검증한다.
+    print("■ 6. 분할 렌더 (--max-terms 2로 강제)")
+    multi = out / "master" / "multipass.mp4"
+    sh([sys.executable, "render_master.py", str(out / "edl.json"),
+        "--preset", "draft", "--max-terms", "2", "-o", str(multi)])
+    mlog = json.loads((out / "render_master_log.json").read_text(encoding="utf-8"))
+    check("여러 패스로 나뉨", mlog["passes"] > 1, f"{mlog['passes']}패스")
+    check("분할 결과 파일 생성", multi.exists())
+    check("분할 결과도 길이 오차 1초 미만",
+          abs(mlog["drift_sec"]) < 1.0, f"{mlog['drift_sec']:+.2f}s")
+    check("단일 패스와 길이 일치",
+          abs(mlog["actual_sec"] - log["actual_sec"]) < 0.5,
+          f"분할 {mlog['actual_sec']}s vs 단일 {log['actual_sec']}s")
+    check("중간 파트 폴더 정리됨", not (out / "master" / "_parts").exists())
+
+    m_residual = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(multi),
+         "-af", "silencedetect=noise=-35dB:d=1.5", "-vn", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    ).stderr.count("silence_start")
+    check("분할본에도 긴 무음이 남지 않음", m_residual == 0, f"{m_residual}개 잔존")
 
     print(f"\n{'─' * 50}")
     if failures:
