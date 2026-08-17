@@ -17,9 +17,11 @@ SCRIPTS = HERE.parent / "scripts"
 FIXTURE_NAME = "2026-08-13 10.00.00 테스트 강의 - 무음 컷 검증"
 
 # make_fixture.py의 타임라인에서 나오는 기대값
-EXPECTED_SILENCES = 6      # 6.0 / 2.5 / 3.0 / 1.0 / 4.0 / 4.5초
-EXPECTED_CUTS = 5          # 1.0초 숨 고르기는 min_silence(1.5) 미만이라 제외
-EXPECTED_FINAL_SEC = 42.0  # 60초 - 컷 18초
+EXPECTED_SILENCES = 6        # 6.0 / 2.5 / 3.0 / 1.0 / 4.0 / 4.5초
+EXPECTED_CUTS = 5            # 1.0초 숨 고르기는 min_silence(1.5) 미만이라 제외
+EXPECTED_CONFIRMS = 1        # 3.0초 무음은 화면 시연 중 → '확인 필요'
+EXPECTED_DEFAULT_SEC = 44.5  # 자동 컷만 적용 (60 - 15.5)
+EXPECTED_FINAL_SEC = 42.0    # 확인 필요 컷까지 승인하면 (60 - 18)
 
 failures: list[str] = []
 checks = 0
@@ -77,19 +79,26 @@ def main() -> int:
     n_sil = analysis["stats"]["silence_count"]
     check(f"무음 {EXPECTED_SILENCES}개 검출", n_sil == EXPECTED_SILENCES, f"{n_sil}개")
     check("분석에 audio_only 사용", "audio_only" in analysis["source"])
+    check("화면 정지 구간 검출", (analysis["stats"]["freeze_count"] or 0) > 0,
+          f"{analysis['stats']['freeze_count']}개")
 
-    print("■ 3. 컷 리스트 제안")
+    print("■ 3. 컷 리스트 제안 (freezedetect 교차 검증)")
     sh([sys.executable, "plan_cuts.py", str(out / "analysis.json")])
     edl = json.loads((out / "edl.json").read_text(encoding="utf-8"))
     kinds = [c["kind"] for c in edl["cuts"]]
+    confirms = [c for c in edl["cuts"] if c["category"] == "confirm"]
     check(f"컷 {EXPECTED_CUTS}개", len(edl["cuts"]) == EXPECTED_CUTS, f"{len(edl['cuts'])}개")
     check("시작 대기 구간 탐지", "head" in kinds)
     check("종료 여운 구간 탐지", "tail" in kinds)
     check("1초 숨 고르기는 보존",
           all(not (36.0 < c["start"] < 38.0) for c in edl["cuts"]))
+    check(f"화면 시연 중 무음은 '확인 필요' {EXPECTED_CONFIRMS}개",
+          len(confirms) == EXPECTED_CONFIRMS, f"{len(confirms)}개")
+    check("시연 구간(26.75s)이 확인 필요로 분류",
+          any(26.0 < c["start"] < 27.5 for c in confirms))
     check("승인용 표 생성", (out / "edl.md").exists())
-    check(f"편집 후 {EXPECTED_FINAL_SEC}초",
-          abs(edl["stats"]["final_sec"] - EXPECTED_FINAL_SEC) < 1.0,
+    check(f"기본(자동만) 편집 후 {EXPECTED_DEFAULT_SEC}초",
+          abs(edl["stats"]["final_sec"] - EXPECTED_DEFAULT_SEC) < 1.0,
           f"{edl['stats']['final_sec']}s")
 
     print("■ 4. 되살리기 (--keep-cuts 1)")
@@ -98,7 +107,16 @@ def main() -> int:
     check("컷이 1개 줄어듦", len(edl_kept["cuts"]) == EXPECTED_CUTS - 1,
           f"{len(edl_kept['cuts'])}개")
     check("되살린 뒤 결과가 더 김", edl_kept["stats"]["final_sec"] > edl["stats"]["final_sec"])
-    sh([sys.executable, "plan_cuts.py", str(out / "analysis.json")])  # 원복
+
+    print("■ 4b. 확인 필요 컷 승인 (--confirm-cuts 3)")
+    sh([sys.executable, "plan_cuts.py", str(out / "analysis.json"),
+        "--confirm-cuts", "3"])
+    edl = json.loads((out / "edl.json").read_text(encoding="utf-8"))
+    check(f"승인 후 편집 {EXPECTED_FINAL_SEC}초",
+          abs(edl["stats"]["final_sec"] - EXPECTED_FINAL_SEC) < 1.0,
+          f"{edl['stats']['final_sec']}s")
+    check("승인 후 적용 컷 5개", edl["stats"]["applied_count"] == 5,
+          f"{edl['stats']['applied_count']}개")
 
     print("■ 5. 마스터 렌더")
     sh([sys.executable, "render_master.py", str(out / "edl.json"), "--preset", "draft"])
