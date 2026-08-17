@@ -35,18 +35,26 @@ PRESETS_PATH = Path(__file__).resolve().parent.parent / "presets" / "encode.json
 MAX_SELECT_TERMS = 80
 
 
-def build_filter_script(keeps: list[dict[str, float]], *, has_audio: bool) -> str:
+def build_filter_script(
+    keeps: list[dict[str, float]], *, has_audio: bool, cfr_fps: int | None = None
+) -> str:
     """select/aselect 필터 스크립트를 만든다.
 
     between(t,S,E)를 더해 남길 구간만 통과시키고, setpts로 타임스탬프를 0부터
     다시 매긴다(안 하면 잘라낸 만큼 빈 시간이 남는다).
+
+    cfr_fps가 주어지면 select 앞에 fps 필터를 넣어 먼저 고정 프레임레이트로
+    만든다. VFR(가변 프레임레이트) 원본에 setpts=N/FRAME_RATE/TB를 그대로 쓰면
+    프레임이 균등 간격으로 재배치되어 오디오와 어긋난다 — 줌 로컬 녹화에서
+    재생 불가/싱크 밀림의 원인(TROUBLESHOOTING 참조).
 
     호출자는 keeps 길이를 MAX_SELECT_TERMS 이하로 잘라서 넘겨야 한다.
     """
     terms = "+".join(
         f"between(t,{k['start']:.3f},{k['end']:.3f})" for k in keeps
     )
-    parts = [f"[0:v]select='{terms}',setpts=N/FRAME_RATE/TB[v]"]
+    v_pre = f"fps={cfr_fps}," if cfr_fps else ""
+    parts = [f"[0:v]{v_pre}select='{terms}',setpts=N/FRAME_RATE/TB[v]"]
     if has_audio:
         parts.append(f"[0:a]aselect='{terms}',asetpts=N/SR/TB[a]")
     return ";\n".join(parts)
@@ -105,6 +113,8 @@ def main() -> int:
     )
     ap.add_argument("--keep-parts", action="store_true",
                     help="분할 렌더 시 중간 파트 파일을 남긴다(디버깅용)")
+    ap.add_argument("--force-cfr", type=int, default=None, metavar="FPS",
+                    help="VFR 여부와 무관하게 이 fps로 정규화 후 컷 (예: 30)")
     ap.add_argument("--dry-run", action="store_true", help="명령만 출력하고 실행하지 않는다")
     args = ap.parse_args()
 
@@ -117,8 +127,14 @@ def main() -> int:
         raise SystemExit("남길 구간이 없습니다. edl.json을 확인하세요.")
 
     src = Path(manifest["source"]["main_video"])
-    has_audio = bool(manifest["media"].get("has_audio"))
+    media = manifest["media"]
+    has_audio = bool(media.get("has_audio"))
     preset = load_preset(args.preset)
+
+    # VFR 원본은 컷 전에 고정 프레임레이트로 정규화한다 (B1, TROUBLESHOOTING 참조)
+    cfr_fps: int | None = args.force_cfr
+    if cfr_fps is None and media.get("vfr"):
+        cfr_fps = round(media.get("fps") or 0) or 30
 
     out_path = args.out or (out_dir / "master" / f"{src.stem}_master.mp4")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +155,8 @@ def main() -> int:
             script_path = out_dir / "filter_master.txt"
             part_path = out_path
         script_path.write_text(
-            build_filter_script(grp, has_audio=has_audio), encoding="utf-8"
+            build_filter_script(grp, has_audio=has_audio, cfr_fps=cfr_fps),
+            encoding="utf-8",
         )
         plans.append(
             (script_path, part_path,
@@ -150,6 +167,9 @@ def main() -> int:
     st = edl["stats"]
     print(f"■ 마스터 렌더 — {src.name}")
     print(f"  남길 구간 : {len(keeps)}개")
+    if cfr_fps:
+        why = "--force-cfr" if args.force_cfr else "VFR 원본 감지"
+        print(f"  CFR 정규화: {cfr_fps}fps ({why}) — 컷 전에 프레임레이트 고정")
     if multipass:
         print(f"  분할 렌더 : {len(groups)}패스 "
               f"({', '.join(str(len(g)) for g in groups)}) — "
@@ -212,6 +232,7 @@ def main() -> int:
         "keeps": len(keeps),
         "passes": len(plans),
         "max_terms": args.max_terms,
+        "cfr_fps": cfr_fps,
         "part_durations_sec": [round(d, 3) for d in part_durations] or None,
         "expected_sec": st["final_sec"],
         "actual_sec": round(actual, 3),

@@ -148,6 +148,44 @@ def main() -> int:
     ).stderr.count("silence_start")
     check("분할본에도 긴 무음이 남지 않음", m_residual == 0, f"{m_residual}개 잔존")
 
+    # 줌 로컬 녹화는 VFR인 경우가 많고, 정규화 없이 자르면 재생 불가/싱크 밀림이
+    # 난다(TROUBLESHOOTING 참조). 픽스처에서 프레임을 불규칙하게 떨어뜨려 VFR을
+    # 재현하고, 감지 → fps 정규화 → A/V 싱크 유지를 검증한다.
+    print("■ 7. VFR 원본 (감지 + CFR 정규화)")
+    vfr_rec = work / "vfr" / "rec"
+    vfr_out = work / "vfr" / "out"
+    vfr_rec.mkdir(parents=True, exist_ok=True)
+    fixture_video = fixture / "zoom_0.mp4"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", str(fixture_video),
+         "-vf", "select='not(mod(n,3))+not(mod(n,7))'", "-fps_mode", "vfr",
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+         "-pix_fmt", "yuv420p", "-c:a", "copy", str(vfr_rec / "zoom_0.mp4")],
+        check=True, capture_output=True,
+    )
+    sh([sys.executable, "ingest.py", str(vfr_rec), "-o", str(vfr_out)])
+    vfr_manifest = json.loads((vfr_out / "manifest.json").read_text(encoding="utf-8"))
+    check("VFR 감지됨", vfr_manifest["media"]["vfr"] is True,
+          f"avg {vfr_manifest['media']['fps']} vs r {vfr_manifest['media']['r_fps']}")
+
+    sh([sys.executable, "analyze.py", str(vfr_out / "manifest.json")])
+    sh([sys.executable, "plan_cuts.py", str(vfr_out / "analysis.json")])
+    sh([sys.executable, "render_master.py", str(vfr_out / "edl.json"),
+        "--preset", "draft"])
+    vlog = json.loads((vfr_out / "render_master_log.json").read_text(encoding="utf-8"))
+    check("CFR 정규화 적용됨", vlog["cfr_fps"] is not None, f"{vlog['cfr_fps']}fps")
+    check("VFR도 길이 오차 1초 미만", abs(vlog["drift_sec"]) < 1.0,
+          f"{vlog['drift_sec']:+.2f}s")
+
+    v_streams = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,duration",
+         "-of", "csv=p=0", vlog["output"]],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    ).stdout.strip().splitlines()
+    durs = [float(line.split(",")[-1]) for line in v_streams if line]
+    av_gap = abs(durs[0] - durs[1]) if len(durs) >= 2 else 999.0
+    check("VFR 렌더 A/V 싱크 (0.2초 이내)", av_gap < 0.2, f"차이 {av_gap:.3f}s")
+
     print(f"\n{'─' * 50}")
     if failures:
         print(f"실패 {len(failures)}/{checks}")

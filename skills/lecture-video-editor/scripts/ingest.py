@@ -53,20 +53,30 @@ def parse_zoom_dirname(name: str) -> dict[str, str]:
     }
 
 
+def _parse_rate(raw: str | None) -> float:
+    if not raw or "/" not in raw:
+        return 0.0
+    num, _, den = raw.partition("/")
+    try:
+        return round(float(num) / float(den), 3) if float(den) else 0.0
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
 def video_meta(path: Path) -> dict[str, Any]:
     probe = ffprobe_json(path)
     fmt = probe.get("format", {})
     v = next((s for s in probe.get("streams", []) if s.get("codec_type") == "video"), {})
     a = next((s for s in probe.get("streams", []) if s.get("codec_type") == "audio"), {})
 
-    fps = 0.0
-    raw_fps = v.get("avg_frame_rate") or v.get("r_frame_rate") or "0/0"
-    if "/" in raw_fps:
-        num, _, den = raw_fps.partition("/")
-        try:
-            fps = round(float(num) / float(den), 3) if float(den) else 0.0
-        except (ValueError, ZeroDivisionError):
-            fps = 0.0
+    avg_fps = _parse_rate(v.get("avg_frame_rate"))
+    r_fps = _parse_rate(v.get("r_frame_rate"))
+    fps = avg_fps or r_fps
+
+    # VFR 감지: 줌 로컬 녹화는 가변 프레임레이트인 경우가 많다. VFR 원본을 그대로
+    # 컷하면 타임스탬프가 꼬여 재생 불가·A/V 밀림이 난다(TROUBLESHOOTING 참조).
+    # r(공칭)과 avg(실측)가 1% 넘게 다르면 VFR로 본다.
+    vfr = bool(r_fps and avg_fps and abs(r_fps - avg_fps) / max(r_fps, avg_fps) > 0.01)
 
     duration = float(fmt.get("duration") or 0.0)
     return {
@@ -75,6 +85,8 @@ def video_meta(path: Path) -> dict[str, Any]:
         "width": v.get("width"),
         "height": v.get("height"),
         "fps": fps,
+        "r_fps": r_fps,
+        "vfr": vfr,
         "video_codec": v.get("codec_name"),
         "audio_codec": a.get("codec_name"),
         "sample_rate": int(a.get("sample_rate") or 0) or None,
@@ -158,7 +170,8 @@ def main() -> int:
     print(f"■ 인제스트 완료 — {lec['title'] or '(제목 없음)'}")
     print(f"  본 영상   : {Path(s['main_video']).name}")
     print(f"  길이      : {media['duration_hms']}  ({media['duration_sec']}s)")
-    print(f"  해상도    : {media['width']}x{media['height']} @ {media['fps']}fps")
+    fps_note = f" ⚠ VFR (공칭 {media['r_fps']}fps) — 렌더 때 자동 정규화" if media["vfr"] else ""
+    print(f"  해상도    : {media['width']}x{media['height']} @ {media['fps']}fps{fps_note}")
     print(f"  코덱      : v={media['video_codec']} / a={media['audio_codec']}")
     print(f"  녹화 종류 : {s['recording_kind']}")
     if s["audio_only"]:
