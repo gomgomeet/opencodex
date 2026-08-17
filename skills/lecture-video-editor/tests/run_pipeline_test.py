@@ -204,6 +204,17 @@ def main() -> int:
     av_gap = abs(durs[0] - durs[1]) if len(durs) >= 2 else 999.0
     check("VFR 렌더 A/V 싱크 (0.2초 이내)", av_gap < 0.2, f"차이 {av_gap:.3f}s")
 
+    # M2 로직(컷 스냅·반복 탐지·SRT 재계산·대본)은 합성 전사로 검증한다 —
+    # whisper 없이 돌므로 CI에서도 항상 실행 가능
+    print("■ 8. M2 로직 (합성 전사)")
+    m2 = subprocess.run(
+        [sys.executable, str(HERE / "test_m2_logic.py"), str(work)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    tail = (m2.stdout or "").strip().splitlines()
+    check("M2 단위 테스트 통과", m2.returncode == 0,
+          tail[-1] if tail else "출력 없음")
+
     print(f"\n{'─' * 50}")
     if failures:
         print(f"실패 {len(failures)}/{checks}")

@@ -23,6 +23,7 @@ CUT_LABEL = {
     "head": "시작 대기",
     "tail": "종료 여운",
     "silence": "무음",
+    "repeat": "반복 어절",
 }
 
 CATEGORY_LABEL = {
