@@ -14,3 +14,7 @@ devlog/
 # Test-generated artifacts
 tests/.tmp-*/
 .claude/
+
+# Python bytecode (skills)
+__pycache__/
+*.pyc

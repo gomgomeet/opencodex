@@ -1,0 +1,38 @@
+{
+  "youtube-long": {
+    "description": "유튜브 풀영상·분할본 (1920x1080)",
+    "scale": [1920, 1080],
+    "fps": 30,
+    "video": ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
+              "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1"],
+    "audio": ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"],
+    "extra": ["-movflags", "+faststart"]
+  },
+  "youtube-shorts": {
+    "description": "유튜브 쇼츠 (1080x1920 세로)",
+    "scale": [1080, 1920],
+    "fps": 30,
+    "video": ["-c:v", "libx264", "-preset", "medium", "-crf", "20",
+              "-pix_fmt", "yuv420p"],
+    "audio": ["-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"],
+    "extra": ["-movflags", "+faststart"]
+  },
+  "master": {
+    "description": "마스터 — 파생본의 원본이므로 화질을 넉넉히 남긴다",
+    "scale": null,
+    "fps": null,
+    "video": ["-c:v", "libx264", "-preset", "medium", "-crf", "16",
+              "-pix_fmt", "yuv420p"],
+    "audio": ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"],
+    "extra": ["-movflags", "+faststart"]
+  },
+  "draft": {
+    "description": "빠른 확인용 저화질 (검수 전용, 배포 금지)",
+    "scale": [1280, 720],
+    "fps": null,
+    "video": ["-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+              "-pix_fmt", "yuv420p"],
+    "audio": ["-c:a", "aac", "-b:a", "128k"],
+    "extra": ["-movflags", "+faststart"]
+  }
+}
